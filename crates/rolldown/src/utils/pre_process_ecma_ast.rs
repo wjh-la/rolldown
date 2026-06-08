@@ -101,6 +101,43 @@ impl PreProcessEcmaAst {
     self.stats = semantic_ret.semantic.stats();
     let mut scoping = Some(semantic_ret.semantic.into_scoping());
 
+    // Step 1.5: Run the React Compiler.
+    // It is a standalone pass that must run first, on the pristine AST, before any
+    // other transform (define, TS/JSX lowering, DCE). It rebuilds and returns the
+    // scoping for the downstream passes when it changes the program.
+    if let Some(react_compiler_options) = &bundle_options.transform_options.react_compiler {
+      let mut react_errors = Vec::new();
+      ast.program.with_mut(|WithMutFields { program, allocator, .. }| {
+        let current_scoping = self.recreate_scoping(&mut scoping, program);
+        scoping = Some(oxc_react_compiler::run(
+          program,
+          allocator,
+          current_scoping,
+          react_compiler_options,
+          &mut react_errors,
+        ));
+      });
+
+      let (errors, react_warnings): (Vec<_>, Vec<_>) =
+        react_errors.into_iter().partition(|error| error.severity == OxcSeverity::Error);
+      if !errors.is_empty() {
+        return Err(BatchedBuildDiagnostic::from(BuildDiagnostic::from_oxc_diagnostics(
+          errors,
+          &source,
+          resolved_id,
+          Severity::Error,
+          EventKind::TransformError,
+        )))?;
+      }
+      warnings.extend(BuildDiagnostic::from_oxc_diagnostics(
+        react_warnings,
+        &source,
+        resolved_id,
+        Severity::Warning,
+        EventKind::ToleratedTransform,
+      ));
+    }
+
     // Extract enum member values before the transformer converts enums.
     // This runs before Step 3 (transformer) because `optimize_const_enums` / `optimize_enums`
     // remove or rewrite enum declarations, making member values unrecoverable afterward.

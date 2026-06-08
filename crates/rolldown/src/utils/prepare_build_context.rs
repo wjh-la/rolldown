@@ -289,6 +289,11 @@ pub fn prepare_build_context(
   let transform_options = {
     let mut raw_transform_options = raw_options.transform.unwrap_or_default();
 
+    // The React Compiler is a standalone pass, not part of the per-file
+    // `oxc::transformer::TransformOptions`, so pull it out before the rest of the
+    // options are consumed and attach it to the container below.
+    let react_compiler = raw_transform_options.react_compiler.take();
+
     let target = match &raw_transform_options.target {
       Some(Either::Left(target)) => EngineTargets::from_target(target),
       Some(Either::Right(targets)) => EngineTargets::from_target_list(targets),
@@ -335,7 +340,7 @@ pub fn prepare_build_context(
     // Create TransformOptions based on tsconfig mode:
     // - Auto: Create Raw mode (will resolve tsconfig per file)
     // - None/Manual: Create Normal mode (resolve tsconfig once now)
-    match tsconfig {
+    let transform_options = match tsconfig {
       ref v @ TsConfig::Manual(ref path) => {
         // Manual mode: Resolve tsconfig now and create Normal mode
         let resolved_tsconfig = resolver
@@ -376,7 +381,9 @@ pub fn prepare_build_context(
           )
         })
       }
-    }
+    };
+
+    Box::new(transform_options.with_react_compiler(react_compiler))
   };
 
   let mut normalized = NormalizedBundlerOptions {
